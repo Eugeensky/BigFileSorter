@@ -12,9 +12,9 @@ public static class SortingHelper
             while ((line = reader.ReadLine()) is not null)
             {
                 // split data into parts on this step to simplify the comparision process
-                var parts = line.Split('.');
-                var strPart = parts[1];
-                var numPart = int.Parse(parts[0]);
+                var dotIndex = line.IndexOf('.');
+                var strPart = line[(dotIndex + 1)..];
+                var numPart = int.Parse(line[..dotIndex]);
                 if (dict.TryGetValue(strPart, out var nums)) nums.Add(numPart);
                 else dict[strPart] = [numPart];
 
@@ -22,7 +22,8 @@ public static class SortingHelper
                 {
                     var tempFilePath = Path.GetTempFileName();
                     tempFilePaths.Add(tempFilePath);
-                    WriteLinesToTempFile(dict.AsParallel().OrderBy(x => x.Key), tempFilePath);
+
+                    WriteLinesToTempFile(GetSorting(dict), tempFilePath);
                     dict.Clear();
                 }
             }
@@ -35,8 +36,10 @@ public static class SortingHelper
                 // Sort the remaining lines and write to a temporary file
                 var tempFilePath = Path.GetTempFileName();
                 tempFilePaths.Add(tempFilePath);
-                WriteLinesToTempFile(dict.AsParallel().OrderBy(x => x.Key), tempFilePath);
+
+                WriteLinesToTempFile(GetSorting(dict), tempFilePath);
                 dict.Clear();
+
                 MergeTempFiles(tempFilePaths, destinationFilePath);
 
                 foreach (var tempFile in tempFilePaths) File.Delete(tempFile);
@@ -44,11 +47,21 @@ public static class SortingHelper
             else
             {
                 // chunk size is bigger then document, so write directly to the dest file without chunking
-                WriteLinesToDestFile(dict.AsParallel().OrderBy(x => x.Key), destinationFilePath);
+                WriteLinesToDestFile(GetSorting(dict), destinationFilePath);
             }
         }
     }
-    
+
+    private static ParallelQuery<KeyValuePair<string, List<int>>> GetSorting(Dictionary<string, List<int>> dict)
+    {
+        return dict
+            .AsParallel()
+            .GroupBy(kv => kv.Key[0])
+            .OrderBy(g => g.Key.ToString().ToLower())
+            .SelectMany(g => g.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase));
+    }
+
+
     private static void MergeTempFiles(List<string> filePaths, string destinationFilePath)
     {
         var chunkReaderSet = new HashSet<ChunkReader>();
@@ -69,10 +82,10 @@ public static class SortingHelper
         }
     }
 
-    private static void WriteLinesToTempFile(IEnumerable<KeyValuePair<string, List<int>>> sorted, string tempFilePath)
+    private static void WriteLinesToTempFile(ParallelQuery<KeyValuePair<string, List<int>>> sorting, string tempFilePath)
     {
         using StreamWriter writer = new(tempFilePath);
-        foreach (var (str, nums) in sorted)
+        foreach (var (str, nums) in sorting)
         {
             // write string part and all the numbers into the tempfile in a following format:
             // StringPart.NumsPart1.NumPart2.NumPart3...etc
@@ -82,10 +95,10 @@ public static class SortingHelper
         }   
     }
 
-    private static void WriteLinesToDestFile(IEnumerable<KeyValuePair<string, List<int>>> lines, string filePath)
+    private static void WriteLinesToDestFile(ParallelQuery<KeyValuePair<string, List<int>>> sorting, string filePath)
     {
         using StreamWriter writer = new(filePath);
-        foreach(var (str, nums) in lines)
+        foreach(var (str, nums) in sorting)
         {
             nums.Sort();
             foreach(var num in nums) writer.WriteLine($"{num}.{str}");
