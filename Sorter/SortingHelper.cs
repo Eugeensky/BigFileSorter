@@ -5,38 +5,48 @@ public static class SortingHelper
     public static void SortFile(string sourceFilePath, string destinationFilePath, int chunkSize)
     {
         List<string> tempFilePaths = [];
-        var dict = new Dictionary<string, List<int>>();
+        var duplicates = new Dictionary<string, List<int>>();
+        var uniques = new Dictionary<string, int>();
         using (StreamReader reader = new(sourceFilePath))
         {
             string line;
             while ((line = reader.ReadLine()) is not null)
             {
-                // split data into parts on this step to simplify the comparision process
-                var parts = line.Split('.');
-                var strPart = parts[1];
-                var numPart = int.Parse(parts[0]);
-                if (dict.TryGetValue(strPart, out var nums)) nums.Add(numPart);
-                else dict[strPart] = [numPart];
+                var dotIndex = line.IndexOf('.');
+                var strPart = line[(dotIndex + 1)..];
+                var numPart = int.Parse(line[..dotIndex]);
+                if (duplicates.TryGetValue(strPart, out var nums))
+                {
+                    nums.Add(numPart);
+                } 
+                else if (uniques.TryGetValue(strPart, out var num))
+                {
+                    duplicates[strPart] = [num, numPart];
+                    uniques.Remove(strPart);
+                } 
+                else
+                {
+                    uniques[strPart] = numPart;
+                }
 
-                if (dict.Count >= chunkSize - 1)
+                if (duplicates.Count + uniques.Count >= chunkSize - 1)
                 {
                     var tempFilePath = Path.GetTempFileName();
                     tempFilePaths.Add(tempFilePath);
-                    WriteLinesToTempFile(dict.AsParallel().OrderBy(x => x.Key), tempFilePath);
-                    dict.Clear();
+                    
+                    WriteLinesToTempFile(uniques, duplicates, tempFilePath);
                 }
             }
         }
         
-        if (dict.Count > 0)
+        if (uniques.Count > 0 || duplicates.Count > 0)
         {
             if (tempFilePaths.Count > 0)
             {
                 // Sort the remaining lines and write to a temporary file
                 var tempFilePath = Path.GetTempFileName();
                 tempFilePaths.Add(tempFilePath);
-                WriteLinesToTempFile(dict.AsParallel().OrderBy(x => x.Key), tempFilePath);
-                dict.Clear();
+                WriteLinesToTempFile(uniques, duplicates, tempFilePath);
                 MergeTempFiles(tempFilePaths, destinationFilePath);
 
                 foreach (var tempFile in tempFilePaths) File.Delete(tempFile);
@@ -44,7 +54,7 @@ public static class SortingHelper
             else
             {
                 // chunk size is bigger then document, so write directly to the dest file without chunking
-                WriteLinesToDestFile(dict.AsParallel().OrderBy(x => x.Key), destinationFilePath);
+                WriteLinesToDestFile(uniques, duplicates, destinationFilePath);
             }
         }
     }
@@ -69,26 +79,50 @@ public static class SortingHelper
         }
     }
 
-    private static void WriteLinesToTempFile(IEnumerable<KeyValuePair<string, List<int>>> sorted, string tempFilePath)
+    private static void WriteLinesToTempFile(Dictionary<string, int> unique, Dictionary<string, List<int>> duplicates, string tempFilePath)
     {
+        var sorting = unique.Keys.Concat(duplicates.Keys)
+            .AsParallel()
+            .GroupBy(k => k[0])
+            .OrderBy(g => g.Key.ToString().ToLower())
+            .SelectMany(g => g.Order(StringComparer.OrdinalIgnoreCase));
+
         using StreamWriter writer = new(tempFilePath);
-        foreach (var (str, nums) in sorted)
+        foreach (var key in sorting)
         {
             // write string part and all the numbers into the tempfile in a following format:
             // StringPart.NumsPart1.NumPart2.NumPart3...etc
-            nums.Sort();
-            var numsStr = string.Join('.', nums.Select(num => num.ToString()));
-            writer.WriteLine($"{str}.{numsStr}");
-        }   
+            if (unique.TryGetValue(key, out var value)) writer.WriteLine($"{key}.{value}");
+            else if(duplicates.TryGetValue(key, out var values))
+            {
+                values.Sort();
+                writer.WriteLine($"{key}.{string.Join('.', values)}");
+            }            
+        }  
+        unique.Clear();
+        duplicates.Clear();
     }
 
-    private static void WriteLinesToDestFile(IEnumerable<KeyValuePair<string, List<int>>> lines, string filePath)
+    private static void WriteLinesToDestFile(Dictionary<string, int> unique, Dictionary<string, List<int>> duplicates, string filePath)
     {
+        var sorting = unique.Keys.Concat(duplicates.Keys)
+            .AsParallel()
+            .GroupBy(k => k[0])
+            .OrderBy(g => g.Key.ToString().ToLower())
+            .SelectMany(g => g.Order(StringComparer.OrdinalIgnoreCase));
+
         using StreamWriter writer = new(filePath);
-        foreach(var (str, nums) in lines)
+        foreach (var key in sorting)
         {
-            nums.Sort();
-            foreach(var num in nums) writer.WriteLine($"{num}.{str}");
+            if (unique.TryGetValue(key, out var uniqueVal)) writer.WriteLine($"{key}.{uniqueVal}");
+            else if (duplicates.TryGetValue(key, out var values))
+            {
+                values.Sort();
+                foreach(var val in values)
+                {
+                    writer.WriteLine($"{key}.{val}");
+                }
+            }
         }
     }
 }
